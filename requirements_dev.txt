@@ -8,3 +8,4 @@ pylint
 pytest
 types-PyYAML
 ruff
+transformers[jax]
