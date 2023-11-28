@@ -1,3 +1,4 @@
+import re
 from typing import List, Tuple
 
 import flax
@@ -44,7 +45,8 @@ class LoraModule(nn.Module):
 
 
 def match_key(key, target_modules: List[str]):
-    return any(target in ".".join(key) for target in target_modules)
+    pattern = r'(.+\.)?{target}(\..+)?\b'
+    return any(re.match(pattern.format(target=target), ".".join(key)) for target in target_modules)
 
 
 def build_lora_model(model: nn.Module, lora_config: LoraConfig, params: dict | FrozenDict):
