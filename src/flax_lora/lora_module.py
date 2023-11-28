@@ -15,8 +15,11 @@ class LoraModule(nn.Module):
 
     def setup(self):
         if isinstance(self.lora_dict, tuple):
+            
             lora_config = self.lora_dict[0]
             weight_shape = self.lora_dict[1]
+            self.scaling = lora_config.lora_alpha / lora_config.rank
+            self.dropout = nn.Dropout(rate=lora_config.lora_dropout)
             self.lora_a = self.param(
                 "lora_a", lambda rng, shape: jax.random.normal(rng, shape), (weight_shape[0], lora_config.rank)
             )
@@ -30,7 +33,8 @@ class LoraModule(nn.Module):
 
     def __call__(self, *args, **kwargs):
         if isinstance(self.lora_dict, tuple):
-            return self.lora_a @ self.lora_b
+            train = kwargs.pop("train", False)
+            return self.dropout(self.lora_a, deterministic=not train) @ self.lora_b * self.scaling
         output = {}
         for k in self.lora_dict.keys():
             if k in ("bias", "scale"):
