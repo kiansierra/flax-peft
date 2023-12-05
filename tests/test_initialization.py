@@ -1,9 +1,9 @@
 import flax
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
-from transformers import BertTokenizerFast, FlaxBertForMaskedLM, FlaxBertModel
-
 from flax_lora import LoraConfig, LoraWrapper, build_lora_model
+from transformers import BertTokenizerFast, FlaxBertForMaskedLM, FlaxBertModel
 
 
 def test_bert() -> None:
@@ -62,5 +62,27 @@ def test_bert_lora_mappings_qk() -> None:
     lora_params = lora_module.init(key, base_params, **inputs)
     flat_lora_params = flax.traverse_util.flatten_dict(lora_params)
     assert len(flat_lora_params) == 2 * 2 * model.config.num_hidden_layers, "2 lora layers, times 2 for q and k times the number of layers"
+    
+    
+def test_conv() -> None:
+    key = jax.random.PRNGKey(0)
+    class ConvModule(nn.Module):
+        features:int
+        def setup(self) -> None:
+            self.conv = nn.Conv(features=self.features, kernel_size=(3, 3))
+            return super().setup()
+        
+        def __call__(self, x):
+            return self.conv(x)
+    module = ConvModule(features=32)
+    inputs = jnp.ones((1, 3, 256, 256))
+    base_params = module.init(key, inputs)
+    
+
+    lora_config = LoraConfig(rank=4, lora_alpha=2, target_modules=['conv'])
+    lora_module = build_lora_model(module, lora_config, base_params['params'])
+    lora_params = lora_module.init(key, base_params['params'], inputs)
+    flat_lora_params = flax.traverse_util.flatten_dict(lora_params)
+    assert len(flat_lora_params) == 2, "2 lora layers"
     
     
