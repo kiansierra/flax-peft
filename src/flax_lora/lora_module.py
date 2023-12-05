@@ -8,11 +8,58 @@ import jax.numpy as jnp
 from flax.core.frozen_dict import FrozenDict
 
 from .lora_config import LoraConfig
-from .utils import is_tuple, merge_lora_params
+from .utils import get_model_type_pytree, is_tuple, merge_lora_params
+
+GeneralDict = dict | FrozenDict
+EmbeddingsShape = Tuple[int, int]
+GeneralShape = Tuple[int, ...]
+
+class LoraEmbedding(nn.Module):
+    lora_config: LoraConfig
+    weight_shape: GeneralShape
+    
+    def setup(self):
+        lora_config = self.lora_config
+        weight_shape = self.weight_shape
+        self.scaling = lora_config.lora_alpha / lora_config.rank
+        self.dropout = nn.Dropout(rate=lora_config.lora_dropout) if lora_config.lora_dropout > 0 else lambda x: x
+        self.lora_a = self.param(
+            "lora_a", lambda rng, shape: jax.random.normal(rng, shape), (weight_shape[0], lora_config.rank)
+        )
+
+        self.lora_b = self.param(
+            "lora_b", lambda rng, shape: jnp.zeros(shape), (lora_config.rank, weight_shape[1])
+        )
+    def __call__(self, *args, **kwargs):
+        train = kwargs.pop("train", False)
+        return self.dropout(self.lora_a, deterministic=not train) @ self.lora_b * self.scaling
+    
+    
+class LoraDense(nn.Module):
+    lora_config: LoraConfig
+    weight_shape: GeneralShape
+    
+    def setup(self):
+        lora_config = self.lora_config
+        weight_shape = self.weight_shape
+        self.scaling = lora_config.lora_alpha / lora_config.rank
+        self.dropout = nn.Dropout(rate=lora_config.lora_dropout) if lora_config.lora_dropout > 0 else lambda x: x
+        self.lora_a = self.param(
+            "lora_a", lambda rng, shape: jax.random.normal(rng, shape), (weight_shape[0], lora_config.rank)
+        )
+
+        self.lora_b = self.param(
+            "lora_b", lambda rng, shape: jnp.zeros(shape), (lora_config.rank, weight_shape[1])
+        )
+    def __call__(self, *args, **kwargs):
+        train = kwargs.pop("train", False)
+        return self.dropout(self.lora_a, deterministic=not train) @ self.lora_b * self.scaling
+        
+
 
 
 class LoraModule(nn.Module):
-    lora_dict: dict | Tuple[LoraConfig, jnp.shape]
+    lora_dict: GeneralDict | Tuple[LoraConfig, GeneralShape, type[nn.Module]]
 
     def setup(self):
         if isinstance(self.lora_dict, tuple):
@@ -49,44 +96,45 @@ def match_key(key, target_modules: List[str]):
     return any(re.match(pattern.format(target=target), ".".join(key)) for target in target_modules)
 
 
-def build_lora_model(model: nn.Module, lora_config: LoraConfig, params: dict | FrozenDict):
-    shape_params = jax.tree_util.tree_map(lambda x: x.shape, params)
-    return LoraWrapper(model, lora_config, shape_params)
+def build_lora_model(model: nn.Module, lora_config: LoraConfig, params: GeneralDict):
+    shape_tree = jax.tree_util.tree_map(lambda x: x.shape, params)
+    type_tree = get_model_type_pytree(model, params)
+    targets_tree = select_target_modules(lora_config, shape_tree, type_tree)
+    return LoraWrapper(model, shape_tree, targets_tree)
 
+def select_target_modules(lora_config: LoraConfig, shape_tree:dict, type_tree:dict) -> dict:
+    """
+    Make a dictionary of target modules
+    """
+    # Generate a flat pytree with the lora_config in each node
+    config_dict = flax.traverse_util.flatten_dict(
+        jax.tree_util.tree_map(lambda x: lora_config, shape_tree, is_leaf=is_tuple)
+    )
+    # Generate a flat pytree with the weight shape in each node
+    shape_dict = flax.traverse_util.flatten_dict(shape_tree)
+    type_dict = flax.traverse_util.flatten_dict(type_tree)
+    # Merge the shape and config dicts so we can initialize the LoraModule
+    # pick first config since it gets duplicated for each shape dimension
+    flat_dict = {
+        k: (v, shape_dict[k], type_dict[k[:-1]]) for k, v in config_dict.items() if match_key(k, lora_config.target_modules)
+    }
+    lora_dict = flax.traverse_util.unflatten_dict(flat_dict)
+    return lora_dict
 
 class LoraWrapper(nn.Module):
     model: nn.Module
-    lora_config: LoraConfig
-    shape_params: dict | FrozenDict
-
-    def select_target_modules(self) -> dict:
-        """
-        Make a dictionary of target modules
-        """
-        # Generate a flat pytree with the lora_config in each node
-        config_dict = flax.traverse_util.flatten_dict(
-            jax.tree_util.tree_map(lambda x: self.lora_config, self.shape_params, is_leaf=is_tuple)
-        )
-        # Generate a flat pytree with the weight shape in each node
-        shape_dict = flax.traverse_util.flatten_dict(self.shape_params)
-        # Merge the shape and config dicts so we can initialize the LoraModule
-        # pick first config since it gets duplicated for each shape dimension
-        flat_dict = {
-            k: (v, shape_dict[k]) for k, v in config_dict.items() if match_key(k, self.lora_config.target_modules)
-        }
-        lora_dict = flax.traverse_util.unflatten_dict(flat_dict)
-        return lora_dict
+    shape_tree: GeneralDict
+    lora_target_modules: GeneralDict
 
     def setup(self) -> None:
-        lora_target_modules = self.select_target_modules()
-        self.lora = LoraModule(lora_dict=lora_target_modules)
+        self.lora = LoraModule(lora_dict=self.lora_target_modules)
 
     def complete_tree(self, lora_output):
         """
         Expand the lora_output pytree to match the shape of the original pytree
         Empty leafs are filled with None
         """
-        empty_tree = jax.tree_map(lambda x: None, self.shape_params, is_leaf=is_tuple)
+        empty_tree = jax.tree_map(lambda x: None, self.shape_tree, is_leaf=is_tuple)
         empty_tree = flax.traverse_util.flatten_dict(empty_tree)
         lora_flat_params = flax.traverse_util.flatten_dict(lora_output)
         empty_tree.update(lora_flat_params)
