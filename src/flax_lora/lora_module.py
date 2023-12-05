@@ -22,7 +22,7 @@ class LoraEmbedding(nn.Module):
         lora_config = self.lora_config
         weight_shape = self.weight_shape
         self.scaling = lora_config.lora_alpha / lora_config.rank
-        self.dropout = nn.Dropout(rate=lora_config.lora_dropout) if lora_config.lora_dropout > 0 else lambda x: x
+        self.dropout = nn.Dropout(rate=lora_config.lora_dropout) if lora_config.lora_dropout > 0 else lambda x, *args, **kwargs: x
         self.lora_a = self.param(
             "lora_a", lambda rng, shape: jax.random.normal(rng, shape), (weight_shape[0], lora_config.rank)
         )
@@ -43,7 +43,7 @@ class LoraDense(nn.Module):
         lora_config = self.lora_config
         weight_shape = self.weight_shape
         self.scaling = lora_config.lora_alpha / lora_config.rank
-        self.dropout = nn.Dropout(rate=lora_config.lora_dropout) if lora_config.lora_dropout > 0 else lambda x: x
+        self.dropout = nn.Dropout(rate=lora_config.lora_dropout) if lora_config.lora_dropout > 0 else lambda x, *args, **kwargs: x
         self.lora_a = self.param(
             "lora_a", lambda rng, shape: jax.random.normal(rng, shape), (weight_shape[0], lora_config.rank)
         )
@@ -55,34 +55,47 @@ class LoraDense(nn.Module):
         train = kwargs.pop("train", False)
         return self.dropout(self.lora_a, deterministic=not train) @ self.lora_b * self.scaling
         
+        
+class LoraConv(nn.Module):
+    lora_config: LoraConfig
+    weight_shape: GeneralShape
+    
+    def setup(self):
+        lora_config = self.lora_config
+        weight_shape = self.weight_shape
+        self.scaling = lora_config.lora_alpha / lora_config.rank
+        self.dropout = nn.Dropout(rate=lora_config.lora_dropout) if lora_config.lora_dropout > 0 else lambda x, *args, **kwargs: x
+        self.lora_a = self.param(
+            "lora_a", lambda rng, shape: jax.random.normal(rng, shape), (*weight_shape[:-1], lora_config.rank)
+        )
 
+        self.lora_b = self.param(
+            "lora_b", lambda rng, shape: jnp.zeros(shape), (lora_config.rank, weight_shape[-1])
+        )
+    def __call__(self, *args, **kwargs):
+        train = kwargs.pop("train", False)
+        return self.dropout(self.lora_a, deterministic=not train) @ self.lora_b * self.scaling
+                
+
+
+LAYER_MAPPING = {
+    nn.Embed: LoraEmbedding,
+    nn.Dense: LoraDense,
+    nn.Conv : LoraConv
+}
 
 
 class LoraModule(nn.Module):
     lora_dict: GeneralDict | Tuple[LoraConfig, GeneralShape, type[nn.Module]]
 
     def setup(self):
-        if isinstance(self.lora_dict, tuple):
-            
-            lora_config = self.lora_dict[0]
-            weight_shape = self.lora_dict[1]
-            self.scaling = lora_config.lora_alpha / lora_config.rank
-            self.dropout = nn.Dropout(rate=lora_config.lora_dropout)
-            self.lora_a = self.param(
-                "lora_a", lambda rng, shape: jax.random.normal(rng, shape), (weight_shape[0], lora_config.rank)
-            )
-
-            self.lora_b = self.param(
-                "lora_b", lambda rng, shape: jnp.zeros(shape), (lora_config.rank, weight_shape[1])
-            )
-        else:
-            for k, v in self.lora_dict.items():
-                setattr(self, k, LoraModule(lora_dict=v, name=k))
+        for k, v in self.lora_dict.items():
+            if isinstance(v, tuple):
+                setattr(self, k, LAYER_MAPPING[v[2]](lora_config=v[0], weight_shape=v[1]))
+                continue
+            setattr(self, k, LoraModule(lora_dict=v, name=k))
 
     def __call__(self, *args, **kwargs):
-        if isinstance(self.lora_dict, tuple):
-            train = kwargs.pop("train", False)
-            return self.dropout(self.lora_a, deterministic=not train) @ self.lora_b * self.scaling
         output = {}
         for k in self.lora_dict.keys():
             if k in ("bias", "scale"):
@@ -146,3 +159,13 @@ class LoraWrapper(nn.Module):
         lora_update_params = self.complete_tree(lora_output)
         lora_fused_params = merge_lora_params(base_params, lora_update_params)
         return self.model.apply({"params": lora_fused_params}, *args, **kwargs)
+    
+    def merge(self, base_params, *args, **kwargs):
+        lora_output = self.lora(*args, **kwargs)
+        lora_update_params = self.complete_tree(lora_output)
+        lora_fused_params = merge_lora_params(base_params, lora_update_params)
+        return lora_fused_params
+    
+    def delta_weights(self, *args, **kwargs):
+        lora_output = self.lora(*args, **kwargs)
+        return lora_output
