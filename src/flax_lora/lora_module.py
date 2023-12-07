@@ -1,5 +1,5 @@
 import re
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import flax
 import flax.linen as nn
@@ -31,8 +31,9 @@ class LoraEmbedding(nn.Module):
             "lora_b", lambda rng, shape: jnp.zeros(shape), (lora_config.rank, weight_shape[1])
         )
     def __call__(self, *args, **kwargs):
-        train = kwargs.pop("train", False)
-        return self.dropout(self.lora_a, deterministic=not train) @ self.lora_b * self.scaling
+        deterministic = kwargs.pop("deterministic", False)
+        dropout_rng = kwargs.pop("dropout_rng", None)
+        return self.dropout(self.lora_a, deterministic=deterministic, rng=dropout_rng) @ self.lora_b * self.scaling
     
     
 class LoraDense(nn.Module):
@@ -52,8 +53,10 @@ class LoraDense(nn.Module):
             "lora_b", lambda rng, shape: jnp.zeros(shape), (lora_config.rank, weight_shape[1])
         )
     def __call__(self, *args, **kwargs):
-        train = kwargs.pop("train", False)
-        return self.dropout(self.lora_a, deterministic=not train) @ self.lora_b * self.scaling
+        dropout_rng = kwargs.pop("dropout_rng", None)
+        deterministic = kwargs.pop("deterministic", False)
+        
+        return self.dropout(self.lora_a, deterministic=deterministic, rng=dropout_rng) @ self.lora_b * self.scaling
         
         
 class LoraConv(nn.Module):
@@ -73,8 +76,9 @@ class LoraConv(nn.Module):
             "lora_b", lambda rng, shape: jnp.zeros(shape), (lora_config.rank, weight_shape[-1])
         )
     def __call__(self, *args, **kwargs):
-        train = kwargs.pop("train", False)
-        return self.dropout(self.lora_a, deterministic=not train) @ self.lora_b * self.scaling
+        deterministic = kwargs.pop("deterministic", False)
+        dropout_rng = kwargs.pop("dropout_rng", None)
+        return self.dropout(self.lora_a, deterministic=deterministic, rng=dropout_rng) @ self.lora_b * self.scaling
                 
 
 
@@ -88,7 +92,7 @@ LAYER_MAPPING = {
 class LoraModule(nn.Module):
     lora_dict: GeneralDict | Tuple[LoraConfig, GeneralShape, type[nn.Module]]
 
-    def setup(self):
+    def setup(self) -> None:
         for k, v in self.lora_dict.items():
             if isinstance(v, tuple):
                 setattr(self, k, LAYER_MAPPING[v[2]](lora_config=v[0], weight_shape=v[1]))
@@ -108,14 +112,7 @@ def match_key(key, target_modules: List[str]):
     pattern = r'(.+\.)?{target}(\..+)?\b'
     return any(re.match(pattern.format(target=target), ".".join(key)) for target in target_modules)
 
-
-def build_lora_model(model: nn.Module, lora_config: LoraConfig, params: GeneralDict):
-    shape_tree = jax.tree_util.tree_map(lambda x: x.shape, params)
-    type_tree = get_model_type_pytree(model, params)
-    targets_tree = select_target_modules(lora_config, shape_tree, type_tree)
-    return LoraWrapper(model, shape_tree, targets_tree)
-
-def select_target_modules(lora_config: LoraConfig, shape_tree:dict, type_tree:dict) -> dict:
+def select_target_modules(lora_config: LoraConfig, shape_tree:GeneralDict) -> GeneralDict:
     """
     Make a dictionary of target modules
     """
@@ -125,14 +122,47 @@ def select_target_modules(lora_config: LoraConfig, shape_tree:dict, type_tree:di
     )
     # Generate a flat pytree with the weight shape in each node
     shape_dict = flax.traverse_util.flatten_dict(shape_tree)
-    type_dict = flax.traverse_util.flatten_dict(type_tree)
     # Merge the shape and config dicts so we can initialize the LoraModule
     # pick first config since it gets duplicated for each shape dimension
     flat_dict = {
-        k: (v, shape_dict[k], type_dict[k[:-1]]) for k, v in config_dict.items() if match_key(k, lora_config.target_modules)
+        k: (v, shape_dict[k]) for k, v in config_dict.items() if match_key(k, lora_config.target_modules)
     }
     lora_dict = flax.traverse_util.unflatten_dict(flat_dict)
     return lora_dict
+
+
+def build_lora_model(model: nn.Module, lora_config: LoraConfig, params: GeneralDict):
+    shape_tree = jax.tree_util.tree_map(lambda x: x.shape, params)
+    targets_tree = select_target_modules(lora_config, shape_tree)
+    selected_keys = flax.traverse_util.flatten_dict(targets_tree).keys()
+    flat_params = flax.traverse_util.flatten_dict(params)
+    selected_params = {k: v for k, v in flat_params.items() if k in selected_keys}
+    selected_params = flax.traverse_util.unflatten_dict(selected_params)
+    type_tree = get_model_type_pytree(model, selected_params)
+    targets_tree = flax.traverse_util.flatten_dict(targets_tree)
+    type_tree = flax.traverse_util.flatten_dict(type_tree)  
+    targets_tree = {k: (*v, type_tree[k[:-1]]) for k, v in targets_tree.items()}
+    targets_tree = flax.traverse_util.unflatten_dict(targets_tree)
+    return LoraWrapper(model, shape_tree, targets_tree)
+
+# def select_target_modules(lora_config: LoraConfig, shape_tree:dict, type_tree:dict) -> dict:
+#     """
+#     Make a dictionary of target modules
+#     """
+#     # Generate a flat pytree with the lora_config in each node
+#     config_dict = flax.traverse_util.flatten_dict(
+#         jax.tree_util.tree_map(lambda x: lora_config, shape_tree, is_leaf=is_tuple)
+#     )
+#     # Generate a flat pytree with the weight shape in each node
+#     shape_dict = flax.traverse_util.flatten_dict(shape_tree)
+#     type_dict = flax.traverse_util.flatten_dict(type_tree)
+#     # Merge the shape and config dicts so we can initialize the LoraModule
+#     # pick first config since it gets duplicated for each shape dimension
+#     flat_dict = {
+#         k: (v, shape_dict[k], type_dict[k[:-1]]) for k, v in config_dict.items() if match_key(k, lora_config.target_modules)
+#     }
+#     lora_dict = flax.traverse_util.unflatten_dict(flat_dict)
+#     return lora_dict
 
 class LoraWrapper(nn.Module):
     model: nn.Module
@@ -154,18 +184,22 @@ class LoraWrapper(nn.Module):
         lora_fused_params = flax.traverse_util.unflatten_dict(empty_tree)
         return lora_fused_params
 
-    def __call__(self, base_params, *args, **kwargs):
-        lora_output = self.lora(*args, **kwargs)
+    def __call__(self, base_params:GeneralDict,
+                 lora_dropout_rng:Optional[jax.random.PRNGKey]=None,
+                 lora_deterministic:bool=False,
+                 *args, **kwargs):
+        lora_output = self.lora(dropout_rng=lora_dropout_rng, deterministic=lora_deterministic)
         lora_update_params = self.complete_tree(lora_output)
         lora_fused_params = merge_lora_params(base_params, lora_update_params)
         return self.model.apply({"params": lora_fused_params}, *args, **kwargs)
     
-    def merge(self, base_params, *args, **kwargs):
-        lora_output = self.lora(*args, **kwargs)
+    def merge(self, base_params:GeneralDict) -> GeneralDict:
+        lora_output = self.lora(lora_deterministic=True)
         lora_update_params = self.complete_tree(lora_output)
         lora_fused_params = merge_lora_params(base_params, lora_update_params)
         return lora_fused_params
     
-    def delta_weights(self, *args, **kwargs):
-        lora_output = self.lora(*args, **kwargs)
+    def delta_weights(self, lora_dropout_rng:Optional[jax.random.PRNGKey]=None,
+                      lora_deterministic:bool=True) -> GeneralDict:
+        lora_output = self.lora(dropout_rng=lora_dropout_rng, deterministic=lora_deterministic)
         return lora_output
