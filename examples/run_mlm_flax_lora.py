@@ -744,9 +744,12 @@ def main():
             weight_decay=training_args.weight_decay,
             mask=decay_mask_fn,
         )
-    module = model.module
+    
+    lora_config = LoraConfig(rank=16*3, lora_alpha=2, target_modules=['self.query', 'self.value'], lora_dropout=0.1)
+    lora_model = build_lora_model(model.module, lora_config, model.params)
+    lora_params = lora_model.init(rng, method=lora_model.delta_weights)
     # Setup train state
-    state = train_state.TrainState.create(apply_fn=module.apply, params=model.params, tx=optimizer)
+    state = train_state.TrainState.create(apply_fn=lora_model.apply, params=lora_params['params'], tx=optimizer)
 
     # Define gradient update step fn
     def train_step(state, batch, dropout_rng):
@@ -756,8 +759,10 @@ def main():
             labels = batch.pop("labels")
             batch['position_ids'] = None
             batch['head_mask'] = None
+            batch['base_params'] = model.params
             rngs = {'dropout' : dropout_rng}
-            logits = state.apply_fn({"params" : params}, **batch, rngs=rngs, deterministic=False)[0]
+            logits = state.apply_fn({"params" : params}, lora_deterministic=False, lora_dropout_rng=dropout_rng,
+                                    **batch, rngs=rngs, deterministic=True)[0]
 
             # compute loss, ignore padded input tokens
             label_mask = jnp.where(labels > 0, 1.0, 0.0)
@@ -794,7 +799,8 @@ def main():
         labels = batch.pop("labels")
         batch['position_ids'] = None
         batch['head_mask'] = None
-        logits = module.apply({"params" : params}, **batch, deterministic=True)[0]
+        batch['base_params'] = model.params
+        logits = lora_model.apply({"params" : params}, lora_deterministic=True, **batch, deterministic=True)[0]
 
         # compute loss, ignore padded input tokens
         label_mask = jnp.where(labels > 0, 1.0, 0.0)
