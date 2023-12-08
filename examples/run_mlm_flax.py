@@ -40,10 +40,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+import orbax
 from datasets import load_dataset
 from flax import jax_utils, traverse_util
 from flax.jax_utils import pad_shard_unpad
-from flax.training import train_state
+from flax.training import orbax_utils, train_state
 from flax.training.common_utils import get_metrics, onehot, shard
 from flax_lora import LoraConfig, build_lora_model
 from huggingface_hub import Repository, create_repo
@@ -744,9 +745,8 @@ def main():
             weight_decay=training_args.weight_decay,
             mask=decay_mask_fn,
         )
-    module = model.module
     # Setup train state
-    state = train_state.TrainState.create(apply_fn=module.apply, params=model.params, tx=optimizer)
+    state = train_state.TrainState.create(apply_fn=model.module.apply, params=model.params, tx=optimizer)
 
     # Define gradient update step fn
     def train_step(state, batch, dropout_rng):
@@ -794,7 +794,7 @@ def main():
         labels = batch.pop("labels")
         batch['position_ids'] = None
         batch['head_mask'] = None
-        logits = module.apply({"params" : params}, **batch, deterministic=True)[0]
+        logits = model.module.apply({"params" : params}, **batch, deterministic=True)[0]
 
         # compute loss, ignore padded input tokens
         label_mask = jnp.where(labels > 0, 1.0, 0.0)
@@ -813,6 +813,8 @@ def main():
 
     # Replicate the train state on each device
     state = jax_utils.replicate(state)
+    orbax_checkpointer = orbax.checkpoint.PyTreeCheckpointer()
+
 
     train_time = 0
     epochs = tqdm(range(num_epochs), desc=f"Epoch ... (1/{num_epochs})", position=0)
@@ -891,8 +893,11 @@ def main():
                 # save checkpoint after each epoch and push checkpoint to the hub
                 if jax.process_index() == 0:
                     params = jax.device_get(jax.tree_util.tree_map(lambda x: x[0], state.params))
-                    model.save_pretrained(training_args.output_dir, params=params)
-                    tokenizer.save_pretrained(training_args.output_dir)
+                    ckpt = {'params': params}
+                    save_args = orbax_utils.save_args_from_target(ckpt)
+                    orbax_checkpointer.save(f'{training_args.output_dir}/{cur_step}', ckpt, save_args=save_args)
+                    # model.save_pretrained(training_args.output_dir, params=params)
+                    # tokenizer.save_pretrained(training_args.output_dir)
                     if training_args.push_to_hub:
                         repo.push_to_hub(commit_message=f"Saving weights and logs of step {cur_step}", blocking=False)
 
