@@ -11,6 +11,24 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "justMyCode": false
+        },
+        {
+            "name": "Run MLM Flax",
+            "type": "python",
+            "request": "launch",
+            "program": "examples/run_mlm_flax.py",
+            "console": "integratedTerminal",
+            "args": ["examples/config.json"],
+            "justMyCode": false
+        },
+        {
+            "name": "Run MLM Flax Lora",
+            "type": "python",
+            "request": "launch",
+            "program": "examples/run_mlm_flax_lora.py",
+            "console": "integratedTerminal",
+            "args": ["examples/config.json"],
+            "justMyCode": false
         }
     ]
 }

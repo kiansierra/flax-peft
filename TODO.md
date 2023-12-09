@@ -1,8 +1,15 @@
 # TODOs
 
+## 2023-12-09
+- [ ] Transformers Integration
+
+## 2023-12-05
+- [ ] Traverse layers with submodules and params
+- [ ] Layer type for modules without submodules and params for modules with params and submodules
+
 ## 2023-11-29
-- [ ] Specific Lora Layers for each type (Dense, Embedding, Conv)
-- [ ] Build Lora Model using above layers
+- [x] Specific Lora Layers for each type (Dense, Embedding, Conv)
+- [x] Build Lora Model using above layers
 
 
 ## 2023-11-28

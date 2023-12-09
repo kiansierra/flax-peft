@@ -745,8 +745,13 @@ def main():
             weight_decay=training_args.weight_decay,
             mask=decay_mask_fn,
         )
+    
+    lora_config = LoraConfig(rank=16*3, lora_alpha=2, target_modules=['self.query', 'self.value'], lora_dropout=0.1)
+    lora_model = build_lora_model(model.module, lora_config, model.params)
+    lora_params = lora_model.init(rng, method=lora_model.delta_weights)
     # Setup train state
-    state = train_state.TrainState.create(apply_fn=model.module.apply, params=model.params, tx=optimizer)
+    state = train_state.TrainState.create(apply_fn=lora_model.apply, params=lora_params['params'], tx=optimizer)
+    orbax_checkpointer = orbax.checkpoint.PyTreeCheckpointer()
 
     # Define gradient update step fn
     def train_step(state, batch, dropout_rng):
@@ -756,8 +761,10 @@ def main():
             labels = batch.pop("labels")
             batch['position_ids'] = None
             batch['head_mask'] = None
+            batch['base_params'] = model.params
             rngs = {'dropout' : dropout_rng}
-            logits = state.apply_fn({"params" : params}, **batch, rngs=rngs, deterministic=False)[0]
+            logits = state.apply_fn({"params" : params}, lora_deterministic=False, lora_dropout_rng=dropout_rng,
+                                    **batch, rngs=rngs, deterministic=True)[0]
 
             # compute loss, ignore padded input tokens
             label_mask = jnp.where(labels > 0, 1.0, 0.0)
@@ -794,7 +801,8 @@ def main():
         labels = batch.pop("labels")
         batch['position_ids'] = None
         batch['head_mask'] = None
-        logits = model.module.apply({"params" : params}, **batch, deterministic=True)[0]
+        batch['base_params'] = model.params
+        logits = lora_model.apply({"params" : params}, lora_deterministic=True, **batch, deterministic=True)[0]
 
         # compute loss, ignore padded input tokens
         label_mask = jnp.where(labels > 0, 1.0, 0.0)
@@ -813,8 +821,6 @@ def main():
 
     # Replicate the train state on each device
     state = jax_utils.replicate(state)
-    orbax_checkpointer = orbax.checkpoint.PyTreeCheckpointer()
-
 
     train_time = 0
     epochs = tqdm(range(num_epochs), desc=f"Epoch ... (1/{num_epochs})", position=0)
@@ -896,8 +902,6 @@ def main():
                     ckpt = {'params': params}
                     save_args = orbax_utils.save_args_from_target(ckpt)
                     orbax_checkpointer.save(f'{training_args.output_dir}/{cur_step}', ckpt, save_args=save_args)
-                    # model.save_pretrained(training_args.output_dir, params=params)
-                    # tokenizer.save_pretrained(training_args.output_dir)
                     if training_args.push_to_hub:
                         repo.push_to_hub(commit_message=f"Saving weights and logs of step {cur_step}", blocking=False)
 
