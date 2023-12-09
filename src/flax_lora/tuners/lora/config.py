@@ -1,7 +1,8 @@
 from dataclasses import dataclass, field
 from typing import List, Literal, Optional, Union
 
-from flax_lora.config import PeftConfigMixin
+from ...config import PeftConfigMixin
+from ...utils import PeftType, TaskType
 
 @dataclass
 class LoraConfig(PeftConfigMixin):
@@ -17,4 +18,4 @@ class LoraConfig(PeftConfigMixin):
     lora_dropout: float = field(default=0.0, metadata={"help": "Lora dropout"})
     
     def __post_init__(self):
-        self.peft_type = "LORA"
+        self.peft_type = PeftType.LORA
