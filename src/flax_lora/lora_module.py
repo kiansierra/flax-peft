@@ -9,7 +9,8 @@ import jax.numpy as jnp
 from flax.core.frozen_dict import FrozenDict
 
 from .tuners.lora import LoraConfig, LoraModule, LoraWrapper
-from .utils import get_model_type_pytree, is_tuple, merge_lora_params, GeneralDict
+from .utils import (GeneralDict, get_model_type_pytree, is_tuple,
+                    merge_lora_params)
 
 
 def select_target_modules(lora_config: LoraConfig, shape_tree:GeneralDict) -> GeneralDict:
@@ -22,7 +23,7 @@ def select_target_modules(lora_config: LoraConfig, shape_tree:GeneralDict) -> Ge
     )
     # Generate a flat pytree with the weight shape in each node
     shape_dict = flax.traverse_util.flatten_dict(shape_tree)
-    # Merge the shape and config dicts so we can initialize the LoraModule
+    # Merge the shape and config dicts so we can initialize the LoraWrapper
     # pick first config since it gets duplicated for each shape dimension
     flat_dict = {
         k: (v, shape_dict[k]) for k, v in config_dict.items() if lora_config.match_key(k)
@@ -43,4 +44,4 @@ def build_lora_model(model: nn.Module, lora_config: LoraConfig, params: GeneralD
     type_tree = flax.traverse_util.flatten_dict(type_tree)  
     targets_tree = {k: (*v, type_tree[k[:-1]]) for k, v in targets_tree.items()}
     targets_tree = flax.traverse_util.unflatten_dict(targets_tree)
-    return LoraWrapper(model, shape_tree, targets_tree)
+    return LoraModule(model, shape_tree, targets_tree)

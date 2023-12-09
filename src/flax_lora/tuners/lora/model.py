@@ -1,13 +1,16 @@
+from typing import Optional, Tuple
+
+import flax
 import flax.linen as nn
-from .config import LoraConfig
-from .layer import LAYER_MAPPING
-from typing import Tuple, Optional
-from ...utils import GeneralDict, GeneralShape, merge_lora_params, is_tuple
-import flax 
 import jax
 import jax.numpy as jnp
 
-class LoraModule(nn.Module):
+from ...utils import GeneralDict, GeneralShape, is_tuple, merge_lora_params
+from .config import LoraConfig
+from .layer import LAYER_MAPPING
+
+
+class LoraWrapper(nn.Module):
     lora_dict: GeneralDict | Tuple[LoraConfig, GeneralShape, type[nn.Module]]
 
     def setup(self) -> None:
@@ -18,7 +21,7 @@ class LoraModule(nn.Module):
                 setattr(self, k, LAYER_MAPPING[v[2]](lora_config=v[0], weight_shape=v[1]))
                 continue
             else:
-                setattr(self, k, LoraModule(lora_dict=v, name=k))
+                setattr(self, k, LoraWrapper(lora_dict=v, name=k))
 
     def __call__(self, *args, **kwargs):
         output = {}
@@ -31,13 +34,13 @@ class LoraModule(nn.Module):
     
 
 
-class LoraWrapper(nn.Module):
+class LoraModule(nn.Module):
     model: nn.Module
     shape_tree: GeneralDict
     lora_target_modules: GeneralDict
 
     def setup(self) -> None:
-        self.lora = LoraModule(lora_dict=self.lora_target_modules)
+        self.lora = LoraWrapper(lora_dict=self.lora_target_modules)
 
     def complete_tree(self, lora_output):
         """
