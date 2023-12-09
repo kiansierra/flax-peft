@@ -36,6 +36,9 @@ class TaskType(str, enum.Enum):
     QUESTION_ANS = "QUESTION_ANS"
     FEATURE_EXTRACTION = "FEATURE_EXTRACTION"
 
+GeneralDict = dict | FrozenDict
+EmbeddingsShape = Tuple[int, int]
+GeneralShape = Tuple[int, ...]
 
 def merge_lora_params(base_params: dict | FrozenDict, lora_update_params: dict | FrozenDict) -> dict | FrozenDict:
     """

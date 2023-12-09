@@ -11,7 +11,6 @@ from .utils import CONFIG_NAME, PeftType, TaskType
 
 
 
-
 @dataclass
 class PeftConfigMixin(PushToHubMixin):
     r"""
@@ -79,6 +78,7 @@ class PeftConfigMixin(PushToHubMixin):
                 Additional keyword arguments passed along to the child class initialization.
         """
         # Avoid circular dependency .. TODO: fix this with a larger refactor
+        from flax_lora.mapping import PEFT_TYPE_TO_CONFIG_MAPPING
 
         path = (
             os.path.join(pretrained_model_name_or_path, subfolder)
@@ -192,25 +192,5 @@ class PeftConfigMixin(PushToHubMixin):
         return False
     
     
-@dataclass
-class LoraConfig(PeftConfigMixin):
-    rank: int = field(default=8, metadata={"help": "Lora attention dimension"})
-    lora_alpha: int = field(default=8, metadata={"help": "Lora alpha"})
-    target_modules: Optional[Union[List[str], str]] = field(
-        default=None,
-        metadata={
-            "help": "List of module names or regex expression of the module names to replace with Lora."
-            "For example, ['q', 'v'] or '.*decoder.*(SelfAttention|EncDecAttention).*(q|v)$' "
-        },
-    )
-    lora_dropout: float = field(default=0.0, metadata={"help": "Lora dropout"})
-    
-    def __post_init__(self):
-        self.peft_type = PeftType.LORA
 
 
-PEFT_TYPE_TO_CONFIG_MAPPING: Dict[str, PeftConfigMixin] = {
-
-    "LORA": LoraConfig,
-
-}
