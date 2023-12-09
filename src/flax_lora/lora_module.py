@@ -12,11 +12,6 @@ from .tuners.lora import LoraConfig, LoraModule, LoraWrapper
 from .utils import get_model_type_pytree, is_tuple, merge_lora_params, GeneralDict
 
 
-
-def match_key(key, target_modules: List[str]):
-    pattern = r'(.+\.)?{target}(\..+)?\b'
-    return any(re.match(pattern.format(target=target), ".".join(key)) for target in target_modules)
-
 def select_target_modules(lora_config: LoraConfig, shape_tree:GeneralDict) -> GeneralDict:
     """
     Make a dictionary of target modules
@@ -30,7 +25,7 @@ def select_target_modules(lora_config: LoraConfig, shape_tree:GeneralDict) -> Ge
     # Merge the shape and config dicts so we can initialize the LoraModule
     # pick first config since it gets duplicated for each shape dimension
     flat_dict = {
-        k: (v, shape_dict[k]) for k, v in config_dict.items() if match_key(k, lora_config.target_modules)
+        k: (v, shape_dict[k]) for k, v in config_dict.items() if lora_config.match_key(k)
     }
     lora_dict = flax.traverse_util.unflatten_dict(flat_dict)
     return lora_dict
