@@ -5,24 +5,28 @@ from typing import Tuple, Optional
 from ...utils import GeneralDict, GeneralShape, merge_lora_params, is_tuple
 import flax 
 import jax
-
+import jax.numpy as jnp
 
 class LoraModule(nn.Module):
     lora_dict: GeneralDict | Tuple[LoraConfig, GeneralShape, type[nn.Module]]
 
     def setup(self) -> None:
         for k, v in self.lora_dict.items():
-            if isinstance(v, tuple):
+            if k in ("bias", "scale"):
+                setattr(self, k, self.param(k, lambda rng, shape: jnp.zeros(shape, dtype="float32"), v[1]))
+            elif isinstance(v, tuple):
                 setattr(self, k, LAYER_MAPPING[v[2]](lora_config=v[0], weight_shape=v[1]))
                 continue
-            setattr(self, k, LoraModule(lora_dict=v, name=k))
+            else:
+                setattr(self, k, LoraModule(lora_dict=v, name=k))
 
     def __call__(self, *args, **kwargs):
         output = {}
         for k in self.lora_dict.keys():
             if k in ("bias", "scale"):
-                continue
-            output[k] = getattr(self, k)(*args, **kwargs)
+                output[k] = getattr(self, k)
+            else:
+                output[k] = getattr(self, k)(*args, **kwargs)
         return output
     
 
