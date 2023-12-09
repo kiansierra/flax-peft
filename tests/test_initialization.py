@@ -74,17 +74,31 @@ def test_conv() -> None:
     inputs = jnp.ones((1, 3, 256, 256))
     base_params = module.init(key, inputs)
     
+    lora_config = LoraConfig(rank=4, lora_alpha=2, target_modules=['conv'], bias="all")
+    lora_module = build_lora_model(module, lora_config, base_params['params'])
+    lora_params = lora_module.init(key, base_params['params'], method=lora_module.delta_weights)
+    flat_lora_params = flax.traverse_util.flatten_dict(lora_params)
+    assert len(flat_lora_params) == 2 + 2, "2 lora layers for conv non for conv2 and both bias"
+    
+    lora_config = LoraConfig(rank=4, lora_alpha=2, target_modules=['conv'], bias="lora_only")
+    lora_module = build_lora_model(module, lora_config, base_params['params'])
+    lora_params = lora_module.init(key, base_params['params'], method=lora_module.delta_weights)
+    flat_lora_params = flax.traverse_util.flatten_dict(lora_params)
+    assert len(flat_lora_params) == 2 + 1, "2 lora layers for conv non for conv2 and only conv bias"
+    
 
-    lora_config = LoraConfig(rank=4, lora_alpha=2, target_modules=['conv'])
+    lora_config = LoraConfig(rank=4, lora_alpha=2, target_modules=['conv'], bias="none")
     lora_module = build_lora_model(module, lora_config, base_params['params'])
     lora_params = lora_module.init(key, base_params['params'], method=lora_module.delta_weights)
     flat_lora_params = flax.traverse_util.flatten_dict(lora_params)
     assert len(flat_lora_params) == 2, "2 lora layers for conv non for conv2"
     
-    lora_config = LoraConfig(rank=4, lora_alpha=2, target_modules=['conv\d*'])
+    lora_config = LoraConfig(rank=4, lora_alpha=2, target_modules=['conv\d*'], bias="none")
     lora_module = build_lora_model(module, lora_config, base_params['params'])
     lora_params = lora_module.init(key, base_params['params'], method=lora_module.delta_weights)
     flat_lora_params = flax.traverse_util.flatten_dict(lora_params)
     assert len(flat_lora_params) == 4, "2 lora layers for conv and 2 for conv2"
+    
+
     
     
