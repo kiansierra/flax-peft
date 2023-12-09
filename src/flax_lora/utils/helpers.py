@@ -9,15 +9,32 @@ GeneralDict = dict | FrozenDict
 EmbeddingsShape = Tuple[int, int]
 GeneralShape = Tuple[int, ...]
 
+def is_nullable_array(*args, **kwargs):
+    """
+    Check if the first argument is a jax array
+    Used to determine if a leaf of a pytree is a jax array
+    """
+    return isinstance(args[0], jax.Array) or args[0] is None
+
 def merge_lora_params(base_params: dict | FrozenDict, lora_update_params: dict | FrozenDict) -> dict | FrozenDict:
     """
     Merge the lora_update_params with the original base params
     """
+    def sum_nullable_params(bp, lp):
+        if lp is not None and bp is not None:
+            return bp + lp
+        elif lp is None and bp is not None:
+            return bp
+        elif lp is not None and bp is None:
+            return lp
+        else:
+            raise ValueError("Both base_params and lora_update_params are None")
+        
+    
     if isinstance(base_params, FrozenDict):
-        return jax.tree_map(
-            lambda bp, lp: bp + lp if lp is not None else bp, base_params.unfreeze(), lora_update_params
+        return jax.tree_map(sum_nullable_params, base_params.unfreeze(), lora_update_params, is_leaf=is_nullable_array
         )
-    return jax.tree_map(lambda bp, lp: bp + lp if lp is not None else bp, base_params, lora_update_params)
+    return jax.tree_map(sum_nullable_params, base_params, lora_update_params, is_leaf=is_nullable_array)
 
 
 def is_tuple(*args, **kwargs):

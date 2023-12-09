@@ -747,8 +747,7 @@ def main():
         )
     
     lora_config = LoraConfig(rank=16*3, lora_alpha=2, target_modules=['self.query', 'self.value'], lora_dropout=0.1)
-    lora_model = build_lora_model(model.module, lora_config, model.params)
-    lora_params = lora_model.init(rng, method=lora_model.delta_weights)
+    lora_model, lora_params, base_params = build_lora_model(model.module, lora_config, model.params)
     # Setup train state
     state = train_state.TrainState.create(apply_fn=lora_model.apply, params=lora_params['params'], tx=optimizer)
     orbax_checkpointer = orbax.checkpoint.PyTreeCheckpointer()
@@ -761,7 +760,7 @@ def main():
             labels = batch.pop("labels")
             batch['position_ids'] = None
             batch['head_mask'] = None
-            batch['base_params'] = model.params
+            batch['base_params'] = base_params
             rngs = {'dropout' : dropout_rng}
             logits = state.apply_fn({"params" : params}, lora_deterministic=False, lora_dropout_rng=dropout_rng,
                                     **batch, rngs=rngs, deterministic=True)[0]

@@ -32,6 +32,18 @@ class LoraWrapper(nn.Module):
                 output[k] = getattr(self, k)(*args, **kwargs)
         return output
     
+    
+def complete_tree(shape_tree:GeneralDict, params:GeneralDict) -> GeneralDict:
+    """
+    Expand the lora_output pytree to match the shape of the original pytree
+    Empty leafs are filled with None
+    """
+    empty_tree = jax.tree_map(lambda x: None, shape_tree, is_leaf=is_tuple)
+    empty_tree = flax.traverse_util.flatten_dict(empty_tree)
+    flat_params = flax.traverse_util.flatten_dict(params)
+    empty_tree.update(flat_params)
+    fused_params = flax.traverse_util.unflatten_dict(empty_tree)
+    return fused_params
 
 
 class LoraModule(nn.Module):
@@ -42,25 +54,27 @@ class LoraModule(nn.Module):
     def setup(self) -> None:
         self.lora = LoraWrapper(lora_dict=self.lora_target_modules)
 
-    def complete_tree(self, lora_output):
-        """
-        Expand the lora_output pytree to match the shape of the original pytree
-        Empty leafs are filled with None
-        """
-        empty_tree = jax.tree_map(lambda x: None, self.shape_tree, is_leaf=is_tuple)
-        empty_tree = flax.traverse_util.flatten_dict(empty_tree)
-        lora_flat_params = flax.traverse_util.flatten_dict(lora_output)
-        empty_tree.update(lora_flat_params)
-        lora_fused_params = flax.traverse_util.unflatten_dict(empty_tree)
-        return lora_fused_params
+    # def complete_tree(self, lora_output):
+    #     """
+    #     Expand the lora_output pytree to match the shape of the original pytree
+    #     Empty leafs are filled with None
+    #     """
+    #     empty_tree = jax.tree_map(lambda x: None, self.shape_tree, is_leaf=is_tuple)
+    #     empty_tree = flax.traverse_util.flatten_dict(empty_tree)
+    #     lora_flat_params = flax.traverse_util.flatten_dict(lora_output)
+    #     empty_tree.update(lora_flat_params)
+    #     lora_fused_params = flax.traverse_util.unflatten_dict(empty_tree)
+    #     return lora_fused_params
 
     def __call__(self, base_params:GeneralDict,
                  lora_dropout_rng:Optional[jax.random.PRNGKey]=None,
                  lora_deterministic:bool=False,
                  *args, **kwargs):
         lora_output = self.lora(dropout_rng=lora_dropout_rng, deterministic=lora_deterministic)
-        lora_update_params = self.complete_tree(lora_output)
-        lora_fused_params = merge_lora_params(base_params, lora_update_params)
+        lora_update_params = complete_tree(self.shape_tree,lora_output)
+        base_update_params = complete_tree(self.shape_tree,base_params)
+        
+        lora_fused_params = merge_lora_params(base_update_params, lora_update_params)
         return self.model.apply({"params": lora_fused_params}, *args, **kwargs)
     
     def merge(self, base_params:GeneralDict) -> GeneralDict:

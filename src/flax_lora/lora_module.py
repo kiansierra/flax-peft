@@ -9,8 +9,7 @@ import jax.numpy as jnp
 from flax.core.frozen_dict import FrozenDict
 
 from .tuners.lora import LoraConfig, LoraModule, LoraWrapper
-from .utils import (GeneralDict, get_model_type_pytree, is_tuple,
-                    merge_lora_params)
+from .utils import GeneralDict, get_model_type_pytree, is_tuple, merge_lora_params
 
 
 def select_target_modules(lora_config: LoraConfig, shape_tree:GeneralDict) -> GeneralDict:
@@ -32,7 +31,10 @@ def select_target_modules(lora_config: LoraConfig, shape_tree:GeneralDict) -> Ge
     return lora_dict
 
 
-def build_lora_model(model: nn.Module, lora_config: LoraConfig, params: GeneralDict):
+def build_lora_model(model: nn.Module,
+                     lora_config: LoraConfig,
+                     params: GeneralDict,
+                     init_rng: Optional[jax.random.PRNGKey] = None) -> Tuple[LoraModule, GeneralDict, GeneralDict]:
     shape_tree = jax.tree_util.tree_map(lambda x: x.shape, params)
     targets_tree = select_target_modules(lora_config, shape_tree)
     selected_keys = flax.traverse_util.flatten_dict(targets_tree).keys()
@@ -44,4 +46,13 @@ def build_lora_model(model: nn.Module, lora_config: LoraConfig, params: GeneralD
     type_tree = flax.traverse_util.flatten_dict(type_tree)  
     targets_tree = {k: (*v, type_tree[k[:-1]]) for k, v in targets_tree.items()}
     targets_tree = flax.traverse_util.unflatten_dict(targets_tree)
-    return LoraModule(model, shape_tree, targets_tree)
+    lora_module =  LoraModule(model, shape_tree, targets_tree)
+    if init_rng is None:
+        init_rng = jax.random.PRNGKey(0)
+    lora_params = lora_module.init(init_rng, method=lora_module.delta_weights)
+    flat_lora_params = flax.traverse_util.flatten_dict(lora_params['params']['lora'])
+    flat_lora_params = {k: flat_params[k] if k in flat_params else v for k, v in flat_lora_params.items()}
+    lora_params = {"params": {"lora" : flax.traverse_util.unflatten_dict(flat_lora_params)}}
+    base_params = flax.traverse_util.unflatten_dict({k: v for k, v in flat_params.items() if k not in flat_lora_params})
+    
+    return lora_module, lora_params, base_params
