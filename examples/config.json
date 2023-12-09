@@ -19,6 +19,6 @@
 "weight_decay":0.01 ,
 "overwrite_output_dir": "true" ,
 "num_train_epochs":2 ,
-"logging_steps":300 ,
-"save_steps":600 ,
-"eval_steps":100}
+"logging_steps":800 ,
+"save_steps":2500 ,
+"eval_steps":2500}
