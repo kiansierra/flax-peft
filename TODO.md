@@ -2,10 +2,13 @@
 
 ## 2023-12-09
 - [ ] Transformers Integration
+- [x] Bias options
+- [ ] Check Dropout format
+
 
 ## 2023-12-05
 - [ ] Traverse layers with submodules and params
-- [ ] Layer type for modules without submodules and params for modules with params and submodules
+- [x] Layer type for modules without submodules and params for modules with params and submodules
 
 ## 2023-11-29
 - [x] Specific Lora Layers for each type (Dense, Embedding, Conv)
